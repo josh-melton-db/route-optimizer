@@ -1,0 +1,78 @@
+resources:
+  jobs:
+    endpoint_test:
+      name: "[${bundle.target}] Route Optimizer Endpoint Test"
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: solver_model_name
+          default: ${var.solver_model_name}
+        - name: solver_model_alias
+          default: ${var.solver_model_alias}
+        - name: solver_endpoint_name
+          default: ${var.solver_endpoint_name}
+        - name: warehouse_id
+          default: ${var.warehouse_id}
+      environments:
+        - environment_key: solver_env
+          spec:
+            client: "4"
+            dependencies:
+              - ortools==9.14.6206
+              - mlflow
+              - pandas
+              - numpy
+      tasks:
+        - task_key: setup_synthetic_data
+          notebook_task:
+            notebook_path: ../notebooks/00_setup_synthetic_data.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        - task_key: register_solver_model
+          depends_on:
+            - task_key: setup_synthetic_data
+          environment_key: solver_env
+          notebook_task:
+            notebook_path: ../notebooks/02_register_solver_model.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              solver_model_name: "{{job.parameters.solver_model_name}}"
+              solver_model_alias: "{{job.parameters.solver_model_alias}}"
+
+        - task_key: deploy_solver_endpoint
+          depends_on:
+            - task_key: register_solver_model
+          notebook_task:
+            notebook_path: ../notebooks/03_deploy_solver_endpoint.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              solver_model_name: "{{job.parameters.solver_model_name}}"
+              solver_model_alias: "{{job.parameters.solver_model_alias}}"
+              solver_endpoint_name: "{{job.parameters.solver_endpoint_name}}"
+
+        - task_key: register_endpoint_functions
+          depends_on:
+            - task_key: deploy_solver_endpoint
+          notebook_task:
+            notebook_path: ../notebooks/04_register_endpoint_functions.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              solver_endpoint_name: "{{job.parameters.solver_endpoint_name}}"
+
+        - task_key: verify_endpoint_sql
+          depends_on:
+            - task_key: register_endpoint_functions
+          notebook_task:
+            notebook_path: ../notebooks/05_verify_endpoint_sql.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              warehouse_id: "{{job.parameters.warehouse_id}}"
+              vehicle_count: "10"

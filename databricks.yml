@@ -10,7 +10,17 @@ variables:
   schema:
     default: route_optimizer_accelerator
   warehouse_id:
+    description: Serverless SQL warehouse ID (required for ai_query)
     default: "2fe54b32b36329be"
+  solver_model_name:
+    description: UC registered MLflow PyFunc model for the OR-Tools solver
+    default: supplychain.route_optimizer_accelerator.route_solver
+  solver_model_alias:
+    description: Registered model alias served by the endpoint
+    default: champion
+  solver_endpoint_name:
+    description: Model Serving endpoint name queried by ai_query
+    default: route-optimizer-solver-dev
 
 targets:
   dev:
@@ -22,3 +32,6 @@ targets:
       catalog: supplychain
       schema: route_optimizer_accelerator
       warehouse_id: "2fe54b32b36329be"
+      solver_model_name: supplychain.route_optimizer_accelerator.route_solver
+      solver_model_alias: champion
+      solver_endpoint_name: route-optimizer-solver-dev

@@ -1,22 +1,36 @@
-# Route Optimizer — Genie UC Function
+# Route Optimizer — Genie UC Functions
 
-End-to-end example: a **Unity Catalog table-valued function** that runs a CVRPTW route solver (Google OR-Tools on CPU) and is callable from **Genie** as a function tool.
+End-to-end example: Unity Catalog table-valued functions that run a CVRPTW route
+solver (Google OR-Tools on CPU) and are callable from **Genie** as function tools.
+
+Two equivalent solver surfaces share `src/solver_core.py`:
+
+1. **Python UDF path** — `solve_routes_json` installs `ortools` in the UC UDF environment.
+2. **Model Serving + `ai_query` path** — OR-Tools runs on a custom serving endpoint; SQL calls it via `ai_query`, decoupling the warehouse from the solver runtime.
 
 ## What ships
 
 | Path | Purpose |
 |------|---------|
-| `src/solver_core.py` | Pure-Python solver source of truth (local unit tests) |
-| `functions/solve_routes_udf.sql` | UC Python scalar UDF — carries the `ortools` dependency, returns JSON |
-| `functions/optimize_routes_tvf.sql` | SQL TVF wrapper — **the Genie tool** |
-| `notebooks/00_setup_synthetic_data.py` | Deterministic demo data (`depot`, `customers`, `parcels`) |
-| `notebooks/01_register_functions.py` | Applies the `.sql` files and smoke-tests `optimize_routes` |
-| `resources/genie_space.json` | Serialized Genie Space config (tables + `optimize_routes` tool) |
-| `databricks.yml` | Asset Bundle — deploy job + workspace variables |
+| `src/solver_core.py` | Pure-Python solver source of truth |
+| `src/solver_endpoint_model.py` | MLflow PyFunc wrapper for Model Serving |
+| `functions/solve_routes_udf.sql` | UC Python scalar UDF |
+| `functions/optimize_routes_tvf.sql` | Genie TVF (Python UDF path) |
+| `functions/solve_routes_endpoint_udf.sql` | SQL scalar wrapping `ai_query` |
+| `functions/optimize_routes_endpoint_tvf.sql` | Genie TVF (endpoint path) |
+| `notebooks/00_setup_synthetic_data.py` | Demo data |
+| `notebooks/01_register_functions.py` | Register Python-UDF functions |
+| `notebooks/02_register_solver_model.py` | Log + register UC PyFunc model |
+| `notebooks/03_deploy_solver_endpoint.py` | Create/update serving endpoint |
+| `notebooks/04_register_endpoint_functions.py` | Register `ai_query` functions |
+| `notebooks/05_verify_endpoint_sql.py` | Serverless warehouse verification |
+| `resources/deploy.job.yml` | Deploy Python-UDF path |
+| `resources/endpoint_test.job.yml` | Deploy + verify endpoint path |
+| `resources/genie_space.json` | Genie Space for `optimize_routes` |
+| `resources/genie_space_endpoint_test.json` | Genie Space for `optimize_routes_via_endpoint` |
+| `databricks.yml` | Asset Bundle |
 
-UC Python **UDTFs cannot install OR-Tools**, so the pattern is: scalar UDF (solver + JSON) → SQL TVF (shape input, explode output) → Genie function tool.
-
-## Deploy
+## Deploy (Python UDF path)
 
 ```bash
 databricks bundle validate -t dev
@@ -24,26 +38,27 @@ databricks bundle deploy -t dev
 databricks bundle run -t dev deploy
 ```
 
-Defaults (override with bundle variables): catalog `supplychain`, schema `route_optimizer_accelerator`, profile `DEFAULT`.
+## Deploy (Model Serving + ai_query path)
 
-## Register the Genie Space
-
-After the deploy job finishes:
+Requires a **serverless SQL warehouse** (`ai_query` is not available on Classic/Pro warehouses).
 
 ```bash
-SERIALIZED=$(python3 -c "import json; print(json.dumps(json.load(open('resources/genie_space.json'))))")
+databricks bundle deploy -t dev
+databricks bundle run -t dev endpoint_test
+```
+
+Then create the endpoint Genie Space:
+
+```bash
+SERIALIZED=$(python3 -c "import json; print(json.dumps(json.load(open('resources/genie_space_endpoint_test.json'))))")
 
 databricks genie create-space <WAREHOUSE_ID> "$SERIALIZED" \
-  --title "Route Optimizer" \
-  --description "Plan parcel-delivery routes via optimize_routes UC function." \
+  --title "Route Optimizer (Endpoint)" \
+  --description "Plan routes via optimize_routes_via_endpoint (ai_query → Model Serving)." \
   --profile DEFAULT
 ```
 
-Update `resources/genie_space.json` if your catalog/schema differ from `supplychain.route_optimizer_accelerator`.
-
-Grant callers `USE CATALOG`, `USE SCHEMA`, `SELECT` on the demo tables, and `EXECUTE` on **both** `solve_routes_json` and `optimize_routes`.
-
-## Test in Genie
+Ask Genie:
 
 ```bash
 databricks genie start-conversation <SPACE_ID> \
@@ -54,16 +69,20 @@ databricks genie start-conversation <SPACE_ID> \
 Genie should call:
 
 ```sql
-SELECT * FROM supplychain.route_optimizer_accelerator.optimize_routes(
+SELECT * FROM supplychain.route_optimizer_accelerator.optimize_routes_via_endpoint(
   depot_id => 1, vehicle_count => 10
 )
 ```
 
-With only 4–5 vans, many parcels are dropped (`is_dropped = true`) — that is expected with tight time windows in the demo data.
+## Grants
 
-## Local solver tests
+Python UDF path: `EXECUTE` on `solve_routes_json` and `optimize_routes`.
+
+Endpoint path: `EXECUTE` on `solve_routes_endpoint_json` and `optimize_routes_via_endpoint`, plus the function definer needs **`CAN QUERY`** on the Model Serving endpoint.
+
+## Local tests
 
 ```bash
-pip install ortools==9.14.6206 numpy
-pytest src/tests/test_solver_core.py
+pip install ortools==9.14.6206 numpy pandas
+pytest src/tests/
 ```
