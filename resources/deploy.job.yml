@@ -1,0 +1,20 @@
+resources:
+  jobs:
+    deploy:
+      name: "[${bundle.target}] Route Optimizer Deploy"
+      tasks:
+        - task_key: setup_synthetic_data
+          notebook_task:
+            notebook_path: ../notebooks/00_setup_synthetic_data.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+
+        - task_key: register_functions
+          depends_on:
+            - task_key: setup_synthetic_data
+          notebook_task:
+            notebook_path: ../notebooks/01_register_functions.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}

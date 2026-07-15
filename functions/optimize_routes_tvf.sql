@@ -1,33 +1,5 @@
--- ============================================================================
--- Route Optimizer Accelerator — Surface 2 (Genie), step 2 of 2
--- SQL Table-Valued Function: optimize_routes(...) RETURNS TABLE(...)
--- ----------------------------------------------------------------------------
--- THIS TVF IS THE GENIE TOOL (see docs/DESIGN.md §6). It is a thin SQL wrapper
--- around the Python scalar UDF solve_routes_json (functions/solve_routes_udf.sql)
--- — the UDF carries the ortools dependency and does the optimization; this TVF
--- adapts the Delta tables into the UDF's input and explodes its JSON result
--- back into rows so Genie (and direct SQL callers) get a clean table.
---
--- Data flow:
---   parcels ⋈ customers  --(filter by depot_id + horizon)-->  stops ARRAY<STRUCT>
---   depot                --(lat/lon for this depot)-------->  depot_lat/lon
---   solve_routes_json(stops, depot_lat, depot_lon, params)  -->  plan JSON string
---   from_json(plan, ARRAY<STRUCT<...>>) + explode            -->  one row per stop
---
--- The RETURNS TABLE column list below is byte-for-byte the JSON keys produced by
--- solve_cvrptw: vehicle_id, stop_sequence, stop_id, lat, lon, arrival_minute,
--- load_after, is_dropped. The from_json schema string uses the same names/types.
---
--- Parameters are qualified with the function name (optimize_routes.<param>)
--- everywhere to avoid clashes with table column names. All parameters have
--- DEFAULTs so Genie can call with as few or as many named args as the user gave
--- (Databricks rule: once one param has a default, all trailing params must too —
--- here every param has one).
---
--- Grants required for callers: USE CATALOG supply_chain, USE SCHEMA
--- route_optimizer_accelerator, EXECUTE ON FUNCTION optimize_routes (and EXECUTE
--- on solve_routes_json, which optimize_routes invokes).
--- ============================================================================
+-- SQL TVF: optimize_routes(...) — Genie function tool.
+-- Selects parcels for a depot, calls solve_routes_json, explodes JSON to rows.
 
 CREATE OR REPLACE FUNCTION supply_chain.route_optimizer_accelerator.optimize_routes(
     -- Which depot's parcels to route, and the within-shift due-by cutoff.

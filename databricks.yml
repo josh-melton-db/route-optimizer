@@ -1,0 +1,24 @@
+bundle:
+  name: route-optimizer
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    default: supplychain
+  schema:
+    default: route_optimizer_accelerator
+  warehouse_id:
+    default: "2fe54b32b36329be"
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: DEFAULT
+    variables:
+      catalog: supplychain
+      schema: route_optimizer_accelerator
+      warehouse_id: "2fe54b32b36329be"

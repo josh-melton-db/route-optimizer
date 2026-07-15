@@ -1,11 +1,8 @@
-"""Shared OR-Tools CVRPTW solver core for the Route Optimizer Accelerator.
+"""Shared OR-Tools CVRPTW solver core for the Route Optimizer Genie example.
 
 Pure Python. Imports ONLY ``ortools`` + ``numpy`` + the standard library — no
-PySpark, no Databricks. This module is the single source of truth for the
-parcel-delivery route optimization (see ``docs/DESIGN.md`` §4.1). Both surfaces
-(the Lakeflow Designer ``python-run-function`` operator and the Genie UC scalar
-UDF) embed a verbatim copy of this logic; they differ only in their data
-adapter, never in the math.
+PySpark, no Databricks. The UC Python scalar UDF in ``functions/solve_routes_udf.sql``
+embeds a verbatim copy of this logic; only the data adapter differs.
 
 Pinned behavior: ``ortools==9.14.6206``.
 

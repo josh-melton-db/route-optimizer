@@ -6,22 +6,21 @@
 # MAGIC Accelerator depends on. Run once.
 # MAGIC
 # MAGIC Tables produced in `${catalog}.${schema}` (default
-# MAGIC `supply_chain.route_optimizer_accelerator`):
+# MAGIC `supplychain.route_optimizer_accelerator`):
 # MAGIC
 # MAGIC | Table | Approx rows | Purpose |
 # MAGIC |---|---|---|
 # MAGIC | `depot` | 1 | Central distribution hub (route start/end) |
 # MAGIC | `customers` | ~40 | Delivery accounts clustered around a metro |
-# MAGIC | `parcels` | ~40 | The stops to route: demand + ready/due time window |
-# MAGIC | `vehicles` | 5 | Delivery-van fleet with uniform capacity |
+# MAGIC | `parcels` | ~40 | Stops to route: demand + ready/due time window |
 # MAGIC
 # MAGIC Deterministic: `random.seed(42)`. Some `due_minute` windows are made tight
 # MAGIC on purpose so the CVRPTW time constraints actually bite when the solver
-# MAGIC runs (notebook `02`/operator/TVF).
+# MAGIC runs when Genie calls `optimize_routes`.
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "supply_chain", "Catalog")
+dbutils.widgets.text("catalog", "supplychain", "Catalog")
 dbutils.widgets.text("schema", "route_optimizer_accelerator", "Schema")
 
 CATALOG = dbutils.widgets.get("catalog")
@@ -85,15 +84,6 @@ ENTITIES = [
 
 DEPOT_ID = 1
 
-# A small, uniform-capacity delivery-van fleet (v1 uses uniform capacity).
-VEHICLES = [
-    ("Van-101", 100, 8 * 60),
-    ("Van-102", 100, 8 * 60),
-    ("Van-103", 100, 8 * 60),
-    ("Van-104", 100, 8 * 60),
-    ("Van-105", 100, 8 * 60),
-]
-
 # Build a deterministic set of customer names across the hubs.
 used_names: set[str] = set()
 CUSTOMERS: list[Row] = []
@@ -140,21 +130,7 @@ _write(depot, "depot")
 customers = spark.createDataFrame(CUSTOMERS)
 _write(customers, "customers")
 
-vehicles = spark.createDataFrame(
-    [
-        Row(
-            vehicle_id=i + 1,
-            depot_id=DEPOT_ID,
-            vehicle_name=name,
-            capacity_units=cap,
-            max_route_minutes=max_min,
-        )
-        for i, (name, cap, max_min) in enumerate(VEHICLES)
-    ]
-)
-_write(vehicles, "vehicles")
-
-print(f"Wrote depot (1), customers ({len(CUSTOMERS)}), vehicles ({len(VEHICLES)})")
+print(f"Wrote depot (1), customers ({len(CUSTOMERS)})")
 
 # COMMAND ----------
 
@@ -170,8 +146,7 @@ print(f"Wrote depot (1), customers ({len(CUSTOMERS)}), vehicles ({len(VEHICLES)}
 # MAGIC   deadlines) so the time-window dimension constrains the solution; the
 # MAGIC   rest are due anytime in the shift.
 # MAGIC
-# MAGIC This is the table the urgency rule (`01_*`) filters into
-# MAGIC `urgent_parcels_today`, which the Designer operator and the Genie TVF route.
+# MAGIC The `optimize_routes` TVF filters these rows by depot and horizon at query time.
 
 # COMMAND ----------
 
@@ -226,7 +201,7 @@ print(
 
 # COMMAND ----------
 
-for tbl in ["depot", "customers", "vehicles", "parcels"]:
+for tbl in ["depot", "customers", "parcels"]:
     cnt = spark.table(tbl).count()
     print(f"{tbl:<12} {cnt:>5} rows")
 

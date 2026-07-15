@@ -1,87 +1,69 @@
-# Route Optimizer Accelerator
+# Route Optimizer — Genie UC Function
 
-Drag-and-drop mathematical solvers in Lakeflow Designer, demonstrated with parcel-delivery route optimization on Google OR-Tools running on CPU.
+End-to-end example: a **Unity Catalog table-valued function** that runs a CVRPTW route solver (Google OR-Tools on CPU) and is callable from **Genie** as a function tool.
 
-This accelerator shows how an analyst can drag a custom **Route Optimizer** operator onto a Lakeflow Designer canvas, connect a table of parcel stops, configure routing parameters in the side panel, and produce optimized delivery routes. It uses a plain CVRPTW solver (capacitated vehicle routing with time windows): each stop has location, demand, ready time, and due-by constraints; each van has capacity and a maximum route duration.
+## What ships
 
-The demo intentionally uses **Google OR-Tools on CPU**, not NVIDIA cuOpt on GPU. OR-Tools keeps the accelerator runnable on commodity Databricks compute with no GPU requirement. The solver construction and deterministic synthetic-data pattern are adapted from the [`gas-tank-delivery`](../gas-tank-delivery) repository, rethemed from fuel drops to parcel deliveries.
+| Path | Purpose |
+|------|---------|
+| `src/solver_core.py` | Pure-Python solver source of truth (local unit tests) |
+| `functions/solve_routes_udf.sql` | UC Python scalar UDF — carries the `ortools` dependency, returns JSON |
+| `functions/optimize_routes_tvf.sql` | SQL TVF wrapper — **the Genie tool** |
+| `notebooks/00_setup_synthetic_data.py` | Deterministic demo data (`depot`, `customers`, `parcels`) |
+| `notebooks/01_register_functions.py` | Applies the `.sql` files and smoke-tests `optimize_routes` |
+| `resources/genie_space.json` | Serialized Genie Space config (tables + `optimize_routes` tool) |
+| `databricks.yml` | Asset Bundle — deploy job + workspace variables |
 
-## What Ships
+UC Python **UDTFs cannot install OR-Tools**, so the pattern is: scalar UDF (solver + JSON) → SQL TVF (shape input, explode output) → Genie function tool.
 
-- `src/solver_core.py` is the shared pure-Python solver core. It contains no Spark or Databricks imports, builds a haversine travel-time matrix, and solves CVRPTW with OR-Tools routing dimensions for capacity and time windows.
-- `notebooks/00_setup_synthetic_data.py` creates deterministic synthetic Delta tables for depots, customers, parcels, and vehicles in Unity Catalog.
-- `notebooks/01_compute_urgent_parcels.py` filters today's parcel data into `urgent_parcels_today`, the stable input table used by both routing surfaces.
-- `operators/route_optimizer.yaml` defines the Lakeflow Designer `python-run-function` operator with inline solver code and an `ortools==9.14.6206` environment dependency.
-- `functions/solve_routes_udf.sql` and `functions/optimize_routes_tvf.sql` expose the same route optimization through a Unity Catalog scalar UDF plus SQL table-valued function for Genie.
-- `databricks.yml` and `resources/setup.job.yml` package the setup notebooks as a Databricks Asset Bundle job.
+## Deploy
 
-Some operator, function, and demo notebook files are delivered by companion PRs. This README describes the merged accelerator layout.
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy -t dev
+databricks bundle run -t dev deploy
+```
 
-## Prerequisites
+Defaults (override with bundle variables): catalog `supplychain`, schema `route_optimizer_accelerator`, profile `DEFAULT`.
 
-- A Databricks workspace with Lakeflow Designer and Databricks Asset Bundles support. This accelerator targets `https://fevm-supply-chain-demo.cloud.databricks.com`.
-- Unity Catalog catalog `supply_chain` and schema `route_optimizer_accelerator`. The schema is expected to already exist.
-- Permissions for users who will run UC-backed functions or Designer operators: `USE SCHEMA` on `supply_chain.route_optimizer_accelerator` and `EXECUTE` on the relevant functions. For `python-run-function` operators, users also need read access to the operator YAML and registration file in the workspace.
-- A serverless SQL warehouse named `Serverless Starter Warehouse` for SQL and Genie demos.
-- Databricks Runtime support for Unity Catalog Python functions with custom environments. OR-Tools is declared per surface as `ortools==9.14.6206`: in the Designer operator `environment` block and in the scalar UDF `ENVIRONMENT` clause.
-- Databricks CLI authentication configured for bundle commands, for example through the workspace profile used by the demo environment.
+## Register the Genie Space
 
-## Architecture
+After the deploy job finishes:
 
-The accelerator has one solver and two Databricks surfaces.
+```bash
+SERIALIZED=$(python3 -c "import json; print(json.dumps(json.load(open('resources/genie_space.json'))))")
 
-1. **Shared solver core** — `src/solver_core.py` implements `haversine_matrix(...)` and `solve_cvrptw(...)`. Node 0 is the depot, parcel stops are independent CVRPTW stops, arc cost is travel minutes plus service time, and dropped stops are returned with `is_dropped = true`.
-2. **Lakeflow Designer operator** — `operators/route_optimizer.yaml` is a `python-run-function` user-defined operator. It reads an input DataFrame, uses column picker configuration from the Designer side panel, converts the stops to Pandas, runs the inline solver, and returns a `routes` DataFrame.
-3. **Genie SQL tool** — `functions/solve_routes_udf.sql` registers a Unity Catalog Python scalar UDF that returns route rows as JSON using the same solver logic. `functions/optimize_routes_tvf.sql` wraps that UDF in a SQL TVF that selects urgent parcels, explodes the JSON route plan, and can be registered as a Genie Space tool.
+databricks genie create-space <WAREHOUSE_ID> "$SERIALIZED" \
+  --title "Route Optimizer" \
+  --description "Plan parcel-delivery routes via optimize_routes UC function." \
+  --profile DEFAULT
+```
 
-Unity Catalog Python UDTFs are not used for OR-Tools because they cannot install this custom dependency. The dependency is declared where it is supported: the Designer operator environment and the scalar UDF `ENVIRONMENT` clause.
+Update `resources/genie_space.json` if your catalog/schema differ from `supplychain.route_optimizer_accelerator`.
 
-Useful Databricks references:
+Grant callers `USE CATALOG`, `USE SCHEMA`, `SELECT` on the demo tables, and `EXECUTE` on **both** `solve_routes_json` and `optimize_routes`.
 
-- [What is Lakeflow Designer?](https://docs.databricks.com/aws/en/designer/what-is-lakeflow-designer)
-- [User-defined operators in Lakeflow Designer](https://docs.databricks.com/aws/en/designer/user-operators)
-- [User-defined operator YAML reference](https://docs.databricks.com/aws/en/designer/operators-yaml-ref)
-- [Tutorial: K-means clustering UDTF operator](https://docs.databricks.com/aws/en/designer/tutorial-kmeans-clustering-udtf)
+## Test in Genie
 
-## Run Order
+```bash
+databricks genie start-conversation <SPACE_ID> \
+  "Plan delivery routes for depot 1 today with 10 vans." \
+  --profile DEFAULT
+```
 
-1. **Deploy the bundle.** From the repository root, run:
+Genie should call:
 
-   ```bash
-   databricks bundle validate
-   databricks bundle deploy -t dev
-   ```
+```sql
+SELECT * FROM supplychain.route_optimizer_accelerator.optimize_routes(
+  depot_id => 1, vehicle_count => 10
+)
+```
 
-   The bundle defaults to catalog `supply_chain`, schema `route_optimizer_accelerator`, and warehouse name `Serverless Starter Warehouse`. Override bundle variables if needed:
+With only 4–5 vans, many parcels are dropped (`is_dropped = true`) — that is expected with tight time windows in the demo data.
 
-   ```bash
-   databricks bundle deploy -t dev --var="catalog=supply_chain" --var="schema=route_optimizer_accelerator"
-   ```
+## Local solver tests
 
-2. **Run the setup notebooks.** Run the DAB job, or run the notebooks manually in order:
-
-   ```bash
-   databricks bundle run -t dev setup_pipeline
-   ```
-
-   The job executes `notebooks/00_setup_synthetic_data.py` first, then `notebooks/01_compute_urgent_parcels.py`. The result is a Unity Catalog table named `supply_chain.route_optimizer_accelerator.urgent_parcels_today`.
-
-3. **Register and run the Designer operator.** Run `notebooks/02_register_operator.py` after the operator files from the companion PR are merged. Then follow `notebooks/03_run_in_designer.md` to open Lakeflow Designer, drag the Route Optimizer onto the canvas, connect `urgent_parcels_today`, choose the ID/lat/lon/demand/due columns, and run the CPU OR-Tools solver.
-
-4. **Run the Genie TVF demo.** Run `notebooks/04_genie_tvf_demo.py` after the function files from the companion PR are merged. The demo creates or uses the scalar UDF and SQL TVF, validates a direct SQL call to `optimize_routes(...)`, and shows how to register the TVF as a Genie Space tool.
-
-## Bundle Contents
-
-The bundle defines one setup job in `resources/setup.job.yml`:
-
-- `setup_synthetic_data` runs `notebooks/00_setup_synthetic_data.py` with `catalog` and `schema` base parameters.
-- `compute_urgent_parcels` runs `notebooks/01_compute_urgent_parcels.py` after the setup task with the same parameters.
-
-The bundle deliberately does not create the Unity Catalog schema or SQL warehouse. The demo environment already has `supply_chain.route_optimizer_accelerator` and the serverless warehouse available.
-
-## Notes
-
-- This accelerator runs on CPU only. There is no GPU dependency and no cuOpt integration.
-- `ortools==9.14.6206` is pinned per execution surface rather than installed globally.
-- The routing model uses haversine travel minutes for portability. Road-network distances such as OSRM can be added later as an optional upgrade without changing the Databricks surfaces.
-- MLflow model serving and PyFunc packaging are intentionally out of scope.
+```bash
+pip install ortools==9.14.6206 numpy
+pytest src/tests/test_solver_core.py
+```

@@ -1,31 +1,5 @@
--- ============================================================================
--- Route Optimizer Accelerator — Surface 2 (Genie), step 1 of 2
--- UC Python SCALAR UDF: solve_routes_json(...) RETURNS STRING
--- ----------------------------------------------------------------------------
--- Why a SCALAR UDF and not a UDTF (see docs/DESIGN.md §3, §6):
---   Unity Catalog Python *UDTFs* cannot install custom pip dependencies — only
---   base-runtime libraries. OR-Tools is a custom dependency, so it cannot live
---   in a UDTF. A UC Python *scalar* UDF CAN declare deps via the ENVIRONMENT
---   clause, so we run the solver here and return the route plan as a JSON
---   string. The SQL TVF in optimize_routes_tvf.sql then wraps this UDF and
---   explodes the JSON into table rows — that TVF is the Genie tool.
---
--- The Python body below EMBEDS a byte-faithful copy of haversine_matrix and
--- solve_cvrptw from src/solver_core.py (design decision #3: each surface
--- embeds the solver verbatim; only the data adapter differs). The only
--- difference from the module is mechanical: `from __future__ import
--- annotations` and the module docstring are dropped (a UDF body is a function
--- scope, not a module), and numpy/ortools/json are imported at the top of the
--- body. The math is unchanged.
---
--- environment_version: UC Python UDFs currently accept only 'None' (the
--- default serverless Python environment). Numeric serverless environment
--- versions (e.g. the operator YAML's '4') apply to notebooks/jobs/pipelines,
--- NOT to UDFs — so 'None' here is correct, not a placeholder.
---
--- Grants required for callers: USE CATALOG supply_chain, USE SCHEMA
--- route_optimizer_accelerator, EXECUTE ON FUNCTION solve_routes_json.
--- ============================================================================
+-- UC Python scalar UDF: solve_routes_json(...) RETURNS STRING (route plan JSON).
+-- OR-Tools is declared via ENVIRONMENT; a SQL TVF wraps this for Genie.
 
 CREATE OR REPLACE FUNCTION supply_chain.route_optimizer_accelerator.solve_routes_json(
     stops ARRAY<STRUCT<
